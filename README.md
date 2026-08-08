@@ -25,7 +25,7 @@
 2. 安装python, `openpyxl`库
    - python可在 https://www.python.org/downloads/ 中下载
    - `openpyxl` 可在python安装完成后执行 `pip install openpyxl`完成，具体方法请读者自行搜索。
-3. 确保你已经将excel表格创建好。（可参考发行版中的表格模板，详细内容如下）
+3. 确保你已经将excel表格创建好。（可参考发行版中的表格模板，地址 https://github.com/dHnECrb/asmFileCreater/releases/download/v0.2.0/data1.xlsx ，详细内容如下）
 
 对于微指令代码表，请按照如下格式编写：
 		
