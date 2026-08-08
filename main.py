@@ -3,51 +3,23 @@
 from os import system, makedirs, path
 import webbrowser
 from time import time
+import openpyxl
 
 ########################Begin#########################
 
-# MROM输出个数
-nof_MROM_outputs = 24
-# MROM表格中addr的位置（从0开始）
-MROM_string_addr_position = 1
-# 从表格中粘贴MROM数据（表头不粘贴）
-# 当MROM_string_addr_position=0时，表头为：Addr      指令名  n   n-1 n-2 n-3 ...
-# 当MROM_string_addr_position=1时，表头为：指令名    Addr    n   n-1 n-2 n-3 ...
-MROM_string = """
-NOACTION	00000	1	0	0	0	0	1	0	1	0	0	1	0	0	1	0	1	0	1	0	0	0	0	1	1
-JUMP	00001	1	0	0	0	0	0	0	1	1	0	1	0	0	1	0	0	0	0	0	0	0	0	0	0
-SLEEP	00010	0	1	1	1	1	1	0	0	1	1	0	0	1	1	0	0	0	0	0	0	0	0	0	1
-BOOM	00011	0	1	0	0	1	0	0	1	0	0	1	0	0	1	0	0	0	0	0	0	0	0	1	0
-LDA	00100	0	0	0	0	0	0	1	0	0	1	0	0	1	0	0	0	0	0	0	0	0	0	0	0
-MOV	00101	1	0	0	0	0	1	0	0	1	0	0	1	0	0	0	0	0	0	0	0	0	0	0	0
-ADD	00110	0	1	1	0	0	1	0	0	0	0	0	1	0	0	0	0	0	0	0	0	1	1	1	1
-SUB	00111	0	0	0	0	0	1	1	0	0	1	0	1	0	0	1	1	1	0	0	0	1	1	1	1
-HLT	11100	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+# 表格1（存放微指令）所在文件位置
+excel1_path = "data1.xlsx"
+# 表格2（存放程序代码）所在文件位置
+excel2_path = "data1.xlsx"
+# 表格1在对应文件的哪一个工作表
+sheet1_index = 0
+# 表格2在对应文件的哪一个工作表
+sheet2_index = 1
+# 表格1有效数据起始行列(从1开始，元组第一个元素代表列数，第二个元素代表行数)
+sheet1_start = (2, 2)
+# 表格2有效数据起始行列(从1开始，元组第一个元素代表列数，第二个元素代表行数)
+sheet2_start = (1, 2)
 
-
-"""
-# 从表格中粘贴PROGRAM数据（表头不粘贴）
-# 表头：解释 地址    数据
-PROGRAM_string = """
-
-JMP1, 06H	00H	00100000
-	01H	00000010
-HLT	02H	11101010
-NOP/Addr	03H	00001010
-JMP3, [[0BH]]	04H	01100000
-	05H	00001011
-NOP/Addr	06H	00000010
-HLT	07H	11100001
-JMP2, [06H]	08H	01000000
-	09H	00000110
-HLT	0AH	11100000
-NOP/Addr	0BH	00000011
-学号后43位（07H）	50H	00000111
-学号后21位（88H）	51H	10001000
-学号后52位之和（66H）	52H	01100110
-
-
-"""
 #########################End##########################
 
 # 可选配置
@@ -82,7 +54,35 @@ if not path.exists(asemFile) and make_hex:
     print("asem 文件位置错误")
     make_hex = False
 
-nof_MROM = nof_MROM_outputs // 8  # MROM的数量
+
+# nof_MROM = nof_MROM_outputs // 8  # MROM的数量
+
+
+def get_max_col_and_row(sheet, start: tuple = (1, 1)) -> tuple:
+    """
+    获取表格有效数据的范围，同时将表格内容以二维列表形式返回
+    :param start: 有效数据起始位置（行数，列数）
+    :param sheet: 工作表
+    :return: 有效数据终止位置（行数，列数），表格内容
+    """
+    max_c = 0
+    max_r = 0
+    l = []
+
+    # 遍历所有单元格寻找有值的最大行列
+    for row in sheet.iter_rows(
+            min_row=start[1], max_row=sheet.max_row, min_col=start[0], max_col=sheet.max_column
+    ):
+        l2 = []
+        for cell in row:
+            if cell.value is not None:
+                l2.append(cell.value)
+                if cell.row > max_r:
+                    max_r = cell.row
+                if cell.column > max_c:
+                    max_c = cell.column
+        l.append(l2)
+    return (max_c, max_r), l
 
 
 def is_bin_addr_next_to(addr1, addr2, prefix='0b'):
@@ -113,43 +113,52 @@ def add_all(string):
 
 
 def to_add_to_result(char):
-    if char == '1':
+    if char == '1' or char == 1:
         return '1'
-    elif char == '0' or char == 'X' or char == '-':
+    elif char == '0' or char == 0 or char == 'X' or char == '-':
         return '0'
-    raise ValueError("无效值：" + char)
+    raise ValueError("无效值：" + str(char))
 
 
-l1 = MROM_string.split("\n")
-n = len(l1)
-l2 = []
-for i in range(n):
-    l2.append(l1[i].split("\t"))
+wb1 = openpyxl.load_workbook(excel1_path)
+if excel1_path == excel2_path:
+    wb2 = wb1
+else:
+    wb2 = openpyxl.load_workbook(excel2_path)
+
+sheet1 = wb1.worksheets[sheet1_index]
+sheet2 = wb2.worksheets[sheet2_index]
+
+sheet1_end, l1 = get_max_col_and_row(sheet1, sheet1_start)
+sheet2_end, l2 = get_max_col_and_row(sheet2, sheet2_start)
+
+nof_MROM_outputs = sheet1_end[0] - sheet1_start[0]
+nof_MROM = nof_MROM_outputs // 8
+
+nof_sheet1_rows = len(l1)
 
 last_addr = None
 
 MROM_result = [""] * (nof_MROM)
-for i in range(n):
-    if not (l2[i][0] and l2[i][1]):
-        continue
-    if len(l2[i]) != nof_MROM_outputs + 2:
+for i in range(nof_sheet1_rows):
+    if len(l1[i]) != nof_MROM_outputs + 1:
         if MROM_result[0] == "":
-            print(f"错误：nof_MROM_outputs的值{nof_MROM_outputs}和数据个数{len(l2[i]) - 2}不匹配")
+            print(f"错误：nof_MROM_outputs的值{nof_MROM_outputs}和数据个数{len(l1[i]) - 2}不匹配")
         else:
-            print(f"错误：MROM_string第{i + 1}行有效数据有{len(l2[i]) - 2}个数据", end="")
-            if len(l2[i]) < nof_MROM_outputs + 2:
+            print(f"错误：MROM_string第{i + 1}行有效数据有{len(l1[i]) - 2}个数据", end="")
+            if len(l1[i]) < nof_MROM_outputs + 2:
                 print("少了", end="")
             else:
                 print("多了", end="")
-            print(f"{abs(len(l2[i]) - nof_MROM_outputs - 2)}个数据。")
+            print(f"{abs(len(l1[i]) - nof_MROM_outputs - 2)}个数据。")
         raise ValueError
-    addr = l2[i][MROM_string_addr_position]
+    addr = l1[i][0]
     if not is_bin_addr_next_to(last_addr, addr):
         add_all("ORG\t" + addr + "B\n")
     add_all("\tDB\t")
     for j in range(nof_MROM):
-        for k in range(2 + j * 8, 2 + (j + 1) * 8):
-            MROM_result[j] += to_add_to_result(l2[i][k])
+        for k in range(1 + j * 8, 1 + (j + 1) * 8):
+            MROM_result[j] += to_add_to_result(l1[i][k])
     add_all("B\n")
     last_addr = addr
 
@@ -167,15 +176,11 @@ for i in range(nof_MROM):
 
 # 开始写PROGRAM.asm
 
-l1 = PROGRAM_string.split("\n")
-n = len(l1)
-l2 = []
-for i in range(n):
-    l2.append(l1[i].split("\t"))
+nof_sheet2_rows = len(l2)
 
 last_addr = None
 PROGRAM_result = ""
-for i in range(n):
+for i in range(nof_sheet2_rows):
     if len(l2[i]) <= 1:
         continue
     if not (l2[i][1] and l2[i][2]):
@@ -201,7 +206,6 @@ with open(f"{PROGRAM_path}/{PROGRAM_file_name}.asm", "w") as f:
 print("PROGRAM.asm文件生成成功。")
 
 if make_hex:
-    print("开始生成hex文件")
     print("生成用于生成hex文件的bat脚本")
     batName = str(time()) + ".bat"
     with open(batName, "w") as f:
@@ -214,4 +218,4 @@ if make_hex:
 
     webbrowser.open(batName)
     # system(f"del {batName}")
-    print("hex文件生成完成。")
+    print("hex文件开始生成。")
