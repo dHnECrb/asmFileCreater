@@ -1,9 +1,13 @@
 # 根据表格中的微指令生成asm文件
 # 请在Begin-End区域内输入数据
-###################Begin#########################
+from os import system, makedirs, path
+import webbrowser
+from time import time
+
+########################Begin#########################
 
 # MROM输出个数
-nof_MROM_outputs = 32
+nof_MROM_outputs = 24
 # MROM表格中addr的位置（从0开始）
 MROM_string_addr_position = 1
 # 从表格中粘贴MROM数据（表头不粘贴）
@@ -44,7 +48,39 @@ NOP/Addr	0BH	00000011
 
 
 """
-###################End#########################
+#########################End##########################
+
+# 可选配置
+
+########################Begin#########################
+
+# 是否要打印asm文件的内容
+print_asm = False
+# 是否要生成hex文件
+make_hex = True
+# 要生成的MROM文件的位置
+MROM_path = "INSTRUCTIONS"
+# MROM文件名前缀
+MROM_file_name_prefix = "MROM"
+# 要生成的PROGRAM文件的位置
+PROGRAM_path = "PROGRAMS"
+# PROGRAM文件名前缀
+PROGRAM_file_name = "PROGRAM"
+# 编译器位置
+asemFile = "C:\Program Files (x86)\Labcenter Electronics\Proteus 8 Professional\Tools\ASEM51\ASEM.EXE"
+########################End###########################
+
+if not path.exists(MROM_path):
+    makedirs(MROM_path, exist_ok=True)
+    print(MROM_path + "路径不存在，已自动创建")
+
+if not path.exists(PROGRAM_path):
+    makedirs(PROGRAM_path, exist_ok=True)
+    print(PROGRAM_path + "路径不存在，已自动创建")
+
+if not path.exists(asemFile) and make_hex:
+    print("asem 文件位置错误")
+    make_hex = False
 
 nof_MROM = nof_MROM_outputs // 8  # MROM的数量
 
@@ -96,6 +132,17 @@ MROM_result = [""] * (nof_MROM)
 for i in range(n):
     if not (l2[i][0] and l2[i][1]):
         continue
+    if len(l2[i]) != nof_MROM_outputs + 2:
+        if MROM_result[0] == "":
+            print(f"错误：nof_MROM_outputs的值{nof_MROM_outputs}和数据个数{len(l2[i]) - 2}不匹配")
+        else:
+            print(f"错误：MROM_string第{i + 1}行有效数据有{len(l2[i]) - 2}个数据", end="")
+            if len(l2[i]) < nof_MROM_outputs + 2:
+                print("少了", end="")
+            else:
+                print("多了", end="")
+            print(f"{abs(len(l2[i]) - nof_MROM_outputs - 2)}个数据。")
+        raise ValueError
     addr = l2[i][MROM_string_addr_position]
     if not is_bin_addr_next_to(last_addr, addr):
         add_all("ORG\t" + addr + "B\n")
@@ -108,13 +155,15 @@ for i in range(n):
 
 add_all("END")
 
-for i in range(nof_MROM):
-    print(f"\nMROM{i + 1}:")
-    print(MROM_result[i])
+if print_asm:
+    for i in range(nof_MROM):
+        print(f"\nMROM{i + 1}:")
+        print(MROM_result[i])
 
 for i in range(nof_MROM):
-    with open(f"MROM{i + 1}.asm", "w") as f:
+    with open(f"{MROM_path}/{MROM_file_name_prefix}{i + 1}.asm", "w") as f:
         f.write(MROM_result[i])
+        print(f"{MROM_file_name_prefix}{i + 1}.asm文件生成成功")
 
 # 开始写PROGRAM.asm
 
@@ -143,9 +192,26 @@ for i in range(n):
     last_addr = addr
 
 PROGRAM_result += "END"
-print("\nPROGRAM:")
-print(PROGRAM_result)
-with open("PROGRAM.asm", "w") as f:
+if print_asm:
+    print("\nPROGRAM:")
+    print(PROGRAM_result)
+with open(f"{PROGRAM_path}/{PROGRAM_file_name}.asm", "w") as f:
     f.write(PROGRAM_result)
 
-print("运行结束。")
+print("PROGRAM.asm文件生成成功。")
+
+if make_hex:
+    print("开始生成hex文件")
+    print("生成用于生成hex文件的bat脚本")
+    batName = str(time()) + ".bat"
+    with open(batName, "w") as f:
+        f.write("@echo off\n")
+        for i in range(nof_MROM):
+            f.write(f"\"{asemFile}\" " + f"{MROM_path}\\{MROM_file_name_prefix}{i + 1}.asm\n")
+        f.write(f"\"{asemFile}\" " + f"{PROGRAM_path}\\{PROGRAM_file_name}.asm\n")
+        f.write("pause\n")
+        f.write("del %0")
+
+    webbrowser.open(batName)
+    # system(f"del {batName}")
+    print("hex文件生成完成。")
