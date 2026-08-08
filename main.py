@@ -67,7 +67,7 @@ PROGRAM_path = "PROGRAMS"
 # PROGRAM文件名前缀
 PROGRAM_file_name = "PROGRAM"
 # 编译器位置
-asemFile = "C:\Program Files (x86)\Labcenter Electronics\Proteus 8 Professional\Tools\ASEM51\ASEM.EXE"
+asemFile = r"C:\Program Files (x86)\Labcenter Electronics\Proteus 8 Professional\Tools\ASEM51\ASEM.EXE"
 ########################End###########################
 
 if not path.exists(MROM_path):
