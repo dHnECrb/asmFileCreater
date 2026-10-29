@@ -1,9 +1,13 @@
 # 根据表格中的微指令生成asm文件
 # 请在Begin-End区域内输入数据
-from os import system, makedirs, path
+from os import makedirs, path
 import webbrowser
-from time import time
+from time import time, sleep
+import traceback
+
 import openpyxl
+
+from asm_to_hex import assemble_file
 
 ########################Begin#########################
 
@@ -19,6 +23,10 @@ sheet2_index = 1
 sheet1_start = (2, 2)
 # 表格2有效数据起始行列(从1开始，元组第一个元素代表列数，第二个元素代表行数)
 sheet2_start = (1, 2)
+# 是否后台监视表格文件，表格更改后自动生成asm并编译hex（True为持续监视，False为只生成一次）
+watch_excel = True
+# 检查表格是否更改的间隔时间（秒）
+check_interval = 1.0
 
 #########################End##########################
 
@@ -42,6 +50,8 @@ PROGRAM_file_name = "PROGRAM"
 asemFile = r"C:\Program Files (x86)\Labcenter Electronics\Proteus 8 Professional\Tools\ASEM51\ASEM.EXE"
 ########################End###########################
 
+# 变量中的“nof”指的是……的数量（number of）。请读者不要学习这种起名方式，可以使用count来表示数量。
+
 if not path.exists(MROM_path):
     makedirs(MROM_path, exist_ok=True)
     print(MROM_path + "路径不存在，已自动创建")
@@ -50,12 +60,12 @@ if not path.exists(PROGRAM_path):
     makedirs(PROGRAM_path, exist_ok=True)
     print(PROGRAM_path + "路径不存在，已自动创建")
 
-if not path.exists(asemFile) and make_hex:
-    print("asem 文件位置错误")
-    make_hex = False
+# asemFile存在时用ASEM51编译，不存在时改用内置汇编器编译
+use_asem = make_hex and path.exists(asemFile)
+if make_hex and not path.exists(asemFile):
+    print("asem 文件位置错误，改用内置汇编器生成hex文件")
 
-
-# nof_MROM = nof_MROM_outputs // 8  # MROM的数量
+MROM_result = [""]
 
 
 def get_max_col_and_row(sheet, start: tuple = (1, 1)) -> tuple:
@@ -120,102 +130,177 @@ def to_add_to_result(char):
     raise ValueError("无效值：" + str(char))
 
 
-wb1 = openpyxl.load_workbook(excel1_path)
-if excel1_path == excel2_path:
-    wb2 = wb1
-else:
-    wb2 = openpyxl.load_workbook(excel2_path)
+def generate_all():
+    """
+    读取Excel表格并生成所有asm文件
+    :return: 生成的asm文件路径列表（MROM在前，PROGRAM在最后）
+    """
+    global MROM_result
 
-sheet1 = wb1.worksheets[sheet1_index]
-sheet2 = wb2.worksheets[sheet2_index]
+    wb1 = openpyxl.load_workbook(excel1_path)
+    if excel1_path == excel2_path:
+        wb2 = wb1
+    else:
+        wb2 = openpyxl.load_workbook(excel2_path)
 
-sheet1_end, l1 = get_max_col_and_row(sheet1, sheet1_start)
-sheet2_end, l2 = get_max_col_and_row(sheet2, sheet2_start)
+    sheet1 = wb1.worksheets[sheet1_index]
+    sheet2 = wb2.worksheets[sheet2_index]
 
-nof_MROM_outputs = sheet1_end[0] - sheet1_start[0]
-nof_MROM = nof_MROM_outputs // 8
+    sheet1_end, l1 = get_max_col_and_row(sheet1, sheet1_start)
+    sheet2_end, l2 = get_max_col_and_row(sheet2, sheet2_start)
 
-nof_sheet1_rows = len(l1)
+    nof_MROM_outputs = sheet1_end[0] - sheet1_start[0]
+    nof_MROM = nof_MROM_outputs // 8
 
-last_addr = None
+    nof_sheet1_rows = len(l1)
 
-MROM_result = [""] * (nof_MROM)
-for i in range(nof_sheet1_rows):
-    if len(l1[i]) != nof_MROM_outputs + 1:
-        if MROM_result[0] == "":
-            print(f"错误：nof_MROM_outputs的值{nof_MROM_outputs}和数据个数{len(l1[i]) - 2}不匹配")
-        else:
-            print(f"错误：MROM_string第{i + 1}行有效数据有{len(l1[i]) - 2}个数据", end="")
-            if len(l1[i]) < nof_MROM_outputs + 2:
-                print("少了", end="")
+    last_addr = None
+
+    MROM_result = [""] * nof_MROM
+    for i in range(nof_sheet1_rows):
+        if len(l1[i]) != nof_MROM_outputs + 1:
+            if MROM_result[0] == "":
+                print(f"错误：nof_MROM_outputs的值{nof_MROM_outputs}和数据个数{len(l1[i]) - 2}不匹配")
             else:
-                print("多了", end="")
-            print(f"{abs(len(l1[i]) - nof_MROM_outputs - 2)}个数据。")
-        raise ValueError
-    addr = l1[i][0]
-    if not is_bin_addr_next_to(last_addr, addr):
-        add_all("ORG\t" + addr + "B\n")
-    add_all("\tDB\t")
-    for j in range(nof_MROM):
-        for k in range(1 + j * 8, 1 + (j + 1) * 8):
-            MROM_result[j] += to_add_to_result(l1[i][k])
-    add_all("B\n")
-    last_addr = addr
+                print(f"错误：MROM_string第{i + 1}行有效数据有{len(l1[i]) - 2}个数据", end="")
+                if len(l1[i]) < nof_MROM_outputs + 2:
+                    print("少了", end="")
+                else:
+                    print("多了", end="")
+                print(f"{abs(len(l1[i]) - nof_MROM_outputs - 2)}个数据。")
+            raise ValueError
+        addr = l1[i][0]
+        if not is_bin_addr_next_to(last_addr, addr):
+            add_all("ORG\t" + addr + "B\n")
+        add_all("\tDB\t")
+        for j in range(nof_MROM):
+            for k in range(1 + j * 8, 1 + (j + 1) * 8):
+                MROM_result[j] += to_add_to_result(l1[i][k])
+        add_all("B\n")
+        last_addr = addr
 
-add_all("END")
+    add_all("END")
 
-if print_asm:
-    for i in range(nof_MROM):
-        print(f"\nMROM{i + 1}:")
-        print(MROM_result[i])
-
-for i in range(nof_MROM):
-    with open(f"{MROM_path}/{MROM_file_name_prefix}{i + 1}.asm", "w") as f:
-        f.write(MROM_result[i])
-        print(f"{MROM_file_name_prefix}{i + 1}.asm文件生成成功")
-
-# 开始写PROGRAM.asm
-
-nof_sheet2_rows = len(l2)
-
-last_addr = None
-PROGRAM_result = ""
-for i in range(nof_sheet2_rows):
-    if len(l2[i]) <= 1:
-        continue
-    if not (l2[i][1] and l2[i][2]):
-        continue
-    addr = l2[i][1]
-    if not is_hex_addr_next_to(last_addr, addr):
-        PROGRAM_result += "ORG\t" + addr + "\n"
-    PROGRAM_result += "\tDB\t"
-    PROGRAM_result += l2[i][2] + "B"
-
-    if l2[i][0]:
-        PROGRAM_result += ";" + l2[i][0]
-    PROGRAM_result += "\n"
-    last_addr = addr
-
-PROGRAM_result += "END"
-if print_asm:
-    print("\nPROGRAM:")
-    print(PROGRAM_result)
-with open(f"{PROGRAM_path}/{PROGRAM_file_name}.asm", "w") as f:
-    f.write(PROGRAM_result)
-
-print("PROGRAM.asm文件生成成功。")
-
-if make_hex:
-    print("生成用于生成hex文件的bat脚本")
-    batName = str(time()) + ".bat"
-    with open(batName, "w") as f:
-        f.write("@echo off\n")
+    if print_asm:
         for i in range(nof_MROM):
-            f.write(f"\"{asemFile}\" " + f"{MROM_path}\\{MROM_file_name_prefix}{i + 1}.asm\n")
-        f.write(f"\"{asemFile}\" " + f"{PROGRAM_path}\\{PROGRAM_file_name}.asm\n")
-        f.write("pause\n")
-        f.write("del %0")
+            print(f"\nMROM{i + 1}:")
+            print(MROM_result[i])
 
-    webbrowser.open(batName)
-    # system(f"del {batName}")
-    print("hex文件开始生成。")
+    asm_files = []
+    for i in range(nof_MROM):
+        asm_file = f"{MROM_path}/{MROM_file_name_prefix}{i + 1}.asm"
+        with open(asm_file, "w") as f:
+            f.write(MROM_result[i])
+        print(f"{MROM_file_name_prefix}{i + 1}.asm文件生成成功")
+        asm_files.append(asm_file)
+
+    # 开始写PROGRAM.asm
+
+    nof_sheet2_rows = len(l2)
+
+    last_addr = None
+    PROGRAM_result = ""
+    for i in range(nof_sheet2_rows):
+        if len(l2[i]) <= 1:
+            continue
+        if not (l2[i][1] and l2[i][2]):
+            continue
+        addr = l2[i][1]
+        if not is_hex_addr_next_to(last_addr, addr):
+            PROGRAM_result += "ORG\t" + addr + "\n"
+        PROGRAM_result += "\tDB\t"
+        PROGRAM_result += l2[i][2] + "B"
+
+        if l2[i][0]:
+            PROGRAM_result += ";" + l2[i][0]
+        PROGRAM_result += "\n"
+        last_addr = addr
+
+    PROGRAM_result += "END"
+    if print_asm:
+        print("\nPROGRAM:")
+        print(PROGRAM_result)
+    program_asm_file = f"{PROGRAM_path}/{PROGRAM_file_name}.asm"
+    with open(program_asm_file, "w") as f:
+        f.write(PROGRAM_result)
+    asm_files.append(program_asm_file)
+
+    print("PROGRAM.asm文件生成成功。")
+    return asm_files
+
+
+def compile_hex(asm_files):
+    """
+    把asm文件编译成hex文件
+    asemFile存在时生成bat脚本调用ASEM51编译，否则用内置汇编器编译
+    :param asm_files: asm文件路径列表
+    """
+    if use_asem:
+        print("生成用于生成hex文件的bat脚本")
+        batName = str(time()) + ".bat"
+        with open(batName, "w") as f:
+            f.write("@echo off\n")
+            for asm_file in asm_files:
+                f.write(f"\"{asemFile}\" " + asm_file.replace("/", "\\") + "\n")
+            f.write("pause\n")
+            f.write("del %0")
+
+        webbrowser.open(batName)
+        print("hex文件开始生成。")
+    else:
+        for asm_file in asm_files:
+            hex_file = assemble_file(asm_file)
+            print(hex_file + "文件生成成功")
+
+
+def generate_and_compile():
+    """生成asm文件并按配置编译hex文件"""
+    asm_files = generate_all()
+    if make_hex:
+        compile_hex(asm_files)
+
+
+def get_excel_mtimes():
+    """
+    获取两个表格文件的修改时间，文件不存在时为None
+    :return: 两个表格文件修改时间组成的元组
+    """
+    mtimes = []
+    for excel_path in (excel1_path, excel2_path):
+        try:
+            mtimes.append(path.getmtime(excel_path))
+        except OSError:
+            mtimes.append(None)
+    return tuple(mtimes)
+
+
+def watch_and_generate():
+    """
+    后台监视表格文件，表格更改后重新生成asm并编译hex，按Ctrl+C退出
+    """
+    print("开始监视表格文件，表格更改后将自动生成asm并编译hex")
+    print("按 Ctrl+C 退出程序")
+    last_mtimes = None
+    while True:
+        mtimes = get_excel_mtimes()
+        if mtimes != last_mtimes:
+            try:
+                generate_and_compile()
+                # 生成成功后才更新修改时间，生成失败时下次循环重试
+                # 使用生成前读取的快照；若生成期间表格又被修改，下一轮会再次生成
+                last_mtimes = mtimes
+                print("监视中，等待表格更改……")
+            except Exception:
+                print("生成失败，错误信息如下。修改表格后将重新生成：")
+                traceback.print_exc()
+        sleep(check_interval)
+
+
+if __name__ == "__main__":
+    if watch_excel:
+        try:
+            watch_and_generate()
+        except KeyboardInterrupt:
+            print("\n程序已退出")
+    else:
+        generate_and_compile()
